@@ -13,47 +13,41 @@ import { encode } from 'https://deno.land/std/encoding/utf8.ts'
 **       also, crash the program if it returns >= 500
 */
 const communicator =
-	conn => message => async (validator, errorer) => {
-
-		if (message == null) {
-			conn.close()
-			throw 'fatal: cannot send null message'
-		}
+	({ conn, quit }) => message => async (validator, errorer) => {
 
 		const response = readLines(new BufReader(conn))
 
 		// writes message to connection
-		console.error(`sending: ${message}`)
 		conn.write(encode(message + '\r\n'))
+			.then(() => console.error(`--> sent: ${message}`))
 
 		// read all msges from connection until we find
 		// something that satisfies validator or errorer
 		for await (const got_msg of response) {
 
-			// extract code from response
-			const code = Number((got_msg.match(/^(\d+)/) || [])[1])
+			const msg = got_msg.trim()
 
-			// crash if no code was found
+			// extract code from response
+			const code = Number((msg.match(/^(\d+)/) || [])[1])
+
+			// forcefully crash if server sent something we can't interpret
 			if (isNaN(code)) {
 				conn.close()
-				throw 'fatal: server did not return response code'
+				throw `fatal: server responded without a code`
 			}
-
-			const msg = got_msg.replace(/[\r\n]+$/, '')
 
 			// crash if server returned error
-			if (errorer(code)) {
-				conn.close()
-				throw `fatal: server returned undesired response code: ${msg}`
-			}
+			if (errorer(code))
+				await quit()
+					.finally(() => { throw `fatal: server returned undesired response code: ${msg}` })
 
 			// continue if this was not code we were looking for
 			if (!validator(code)) {
-				console.error(`received irrelevant: ${msg}`)
+				console.error(`<-- okay: ${msg}`)
 				continue
 			}
 
-			console.error(`received expected: ${msg}`)
+			console.error(`<-- good: ${msg}`)
 			return msg
 
 		}
@@ -62,11 +56,11 @@ const communicator =
 
 /* a communicator that sends a message
 ** and waits for `code`
-** and crashes on 500+
+** and crashes on 400+
 */
 const standard_communicator =
 	conn => message => code =>
-		communicator(conn)(message)(c => c === code, e => e >= 500)
+		communicator(conn)(message)(c => c === code, e => e >= 400)
 
 /*******************************/
 /** what to say to the server **/
@@ -75,6 +69,7 @@ const standard_communicator =
 // SMTP codes
 const C = {
 	serv_ready: 220,
+	serv_okdon: 221,
 	auth_succe: 235,
 	serv_okayy: 250,
 
@@ -89,15 +84,16 @@ const C = {
 const connect =
 	async (hostname, port=465) => {
 
-		const conn = await Deno.connectTls({ hostname, port })
-		const comm = standard_communicator(conn)
+		const self = {}
 
-		await comm('ehlo hi')(C.serv_ready)
+		self.conn = await Deno.connectTls({ hostname, port })
+		self.comm = standard_communicator(self)
 
-		const self = { conn, comm }
-		self.auth  = auth(self)
-		self.send  = send(self)
-		self.close = () => conn.close()
+		self.auth = auth(self)
+		self.send = send(self)
+		self.quit = quit(self)
+
+		await self.comm('ehlo hi')(C.serv_ready) // would this be better as a separate function?
 
 		return self
 
@@ -130,6 +126,11 @@ const send =
 		return comm(`${message}\r\n.`)(C.serv_okayy)
 
 	}
+
+const quit =
+	({ comm, conn }) => () =>
+		comm('quit')(C.serv_okdon)
+			.finally(() => conn.close())
 
 // export
 export default connect

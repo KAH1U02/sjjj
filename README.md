@@ -25,8 +25,8 @@ pizza is delicious`
 // send email
 await server.send('a@gmail.com')('b@gmail.com')(msg)
 
-// close connection
-server.close()
+// finish using server
+server.quit()
 ```
 
 
