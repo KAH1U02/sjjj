@@ -32,10 +32,10 @@ server.quit()
 
 features
 ---------
-- you can send email
-- you can manually extend functionality with provided `communicator` and `standard_communicator` functions
-- code has comments
-- code is one file under 150 lines long
+- can send email
+- can be manually extended with provided `communicator` and `standard_communicator` functions
+- has comments
+- is one file under 150 lines long
 
 
 notes
