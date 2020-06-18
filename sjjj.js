@@ -13,7 +13,7 @@ import { encode } from 'https://deno.land/std/encoding/utf8.ts'
 **       also, crash the program if it returns >= 500
 */
 const communicator =
-	conn => message => async (validator, errorer=C.error) => {
+	conn => message => async (validator, errorer) => {
 
 		if (message == null) {
 			conn.close()
@@ -23,80 +23,94 @@ const communicator =
 		const response = readLines(new BufReader(conn))
 
 		// writes message to connection
+		console.error(`sending: ${message}`)
 		conn.write(encode(message + '\r\n'))
-		console.error(`sent: ${message}`)
 
 		// read all msges from connection until we find
 		// something that satisfies validator or errorer
 		for await (const got_msg of response) {
 
 			// extract code from response
-			const code = Number(got_msg.match(/^(\d+)/)[1])
+			const code = Number((got_msg.match(/^(\d+)/) || [])[1])
 
-			// strip response to make logging cleaner
-			const msg = got_msg.replace(/[\r\n]+$/, '')
-
-			if (validator(code)) {
-				console.error(`received expected: ${msg}`)
-				return msg
+			// crash if no code was found
+			if (isNaN(code)) {
+				conn.close()
+				throw 'fatal: server did not return response code'
 			}
 
-			if (errorer(code))
-				throw `fatal: server returned undesired response code: ${msg}`
+			const msg = got_msg.replace(/[\r\n]+$/, '')
 
-			console.error(`received irrelevant: ${msg}`)
+			// crash if server returned error
+			if (errorer(code)) {
+				conn.close()
+				throw `fatal: server returned undesired response code: ${msg}`
+			}
+
+			// continue if this was not code we were looking for
+			if (!validator(code)) {
+				console.error(`received irrelevant: ${msg}`)
+				continue
+			}
+
+			console.error(`received expected: ${msg}`)
+			return msg
+
 		}
 
 	}
+
+/* a communicator that sends a message
+** and waits for `code`
+** and crashes on 500+
+*/
+const standard_communicator =
+	conn => message => code =>
+		communicator(conn)(message)(c => c === code, e => e >= 500)
 
 /*******************************/
 /** what to say to the server **/
 /*******************************/
 
-const eq =
-	desired =>
-		code => code === desired
-
-// defines a bunch of different code 'validators', i.e.
-// functions that take a code and return if it matches a pattern
-// e.g. C.serv_ready(100) will produce false
-//      C.serv_ready(220) will produce true
-//      C.error(555)      will produce true
+// SMTP codes
 const C = {
-	serv_ready: eq(220),
-	auth_succe: eq(235),
-	serv_okayy: eq(250),
+	serv_ready: 220,
+	auth_succe: 235,
+	serv_okayy: 250,
 
-	auth_promp: eq(334),
-	data_start: eq(354),
-
-	error: code => code >= 500
+	auth_promp: 334,
+	data_start: 354,
 }
 
 /* connects to an SMTP server
 ** returns a bound 'communicator' function that can be
 ** used by smpt_auth and smtp_send
 */
-export const connect =
+const connect =
 	async (hostname, port=465) => {
 
-		const conn   = await Deno.connectTls({ hostname, port })
-		const server = communicator(conn)
+		const conn = await Deno.connectTls({ hostname, port })
+		const comm = standard_communicator(conn)
 
-		await server('ehlo hi')(C.serv_ready)
+		await comm('ehlo hi')(C.serv_ready)
 
-		return server
+		const self = { conn, comm }
+		self.auth  = auth(self)
+		self.send  = send(self)
+		self.close = () => conn.close()
+
+		return self
 
 	}
 
-/* present authentication to the server
+/* sends authentication to the server
 */
-export const auth =
-	server => username => async password => {
+const auth =
+	({ comm }) => username => async password => {
 
-		await  server('auth login')         (C.auth_promp)
-		await  server(window.btoa(username))(C.auth_promp)
-		return server(window.btoa(password))(C.auth_succe)
+		await  comm('auth login')         (C.auth_promp)
+		await  comm(window.btoa(username))(C.auth_promp)
+		return comm(window.btoa(password))(C.auth_succe)
 
 	}
 
@@ -104,15 +118,19 @@ export const auth =
 ** note: you probably need to authenticate with
 **       smpt_auth before you use this function
 */
-export const send =
-	server => email_from => (...emails_to) => async message => {
+const send =
+	({ comm }) => email_from => (...emails_to) => async message => {
 
-		await server(`mail from:<${email_from}>`)(C.serv_okayy)
+		await comm(`mail from:<${email_from}>`)(C.serv_okayy)
 
 		for (const email of emails_to)
-			await server(`rcpt to:<${email}>`)(C.serv_okayy)
+			await comm(`rcpt to:<${email}>`)(C.serv_okayy)
 
-		await  server('data')           (C.data_start)
-		return server(`${message}\r\n.`)(C.serv_okayy)
+		await  comm('data')           (C.data_start)
+		return comm(`${message}\r\n.`)(C.serv_okayy)
 
 	}
+
+// export
+export default connect
+export { communicator, standard_communicator }
