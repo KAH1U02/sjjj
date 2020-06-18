@@ -7,7 +7,7 @@ import { encode } from 'https://deno.land/std/encoding/utf8.ts'
 
 /* sends a message to connection then waits for
 ** a response code that satisfies the given validator or errorer
-** e.g. `await communicator(conn)('ehlo hi')(C.serv_ready)` means:
+** e.g. `await communicator(conn)('ehlo hi')(C.ready)` means:
 **       send "ehlo hi\r\n" over conn
 **       and wait until it returns 220 (parsed from the start of the message)
 **       also, crash the program if it returns >= 500
@@ -68,13 +68,12 @@ const standard_communicator =
 
 // SMTP codes
 const C = {
-	serv_ready: 220,
-	serv_okdon: 221,
-	auth_succe: 235,
-	serv_okayy: 250,
-
-	auth_promp: 334,
-	data_start: 354,
+	ready:       220, // server is ready to go!
+	done:        221, // server is done and closing connection
+	auth_good:   235, // successfully authenticated
+	okay:        250, // server is happy
+	auth_prompt: 334, // server is prompting for username/password
+	data_start:  354, // server is listening for email data
 }
 
 /* connects to an SMTP server
@@ -93,7 +92,7 @@ const connect =
 		self.send = send(self)
 		self.quit = quit(self)
 
-		await self.comm('ehlo hi')(C.serv_ready) // would this be better as a separate function?
+		await self.comm('ehlo hi')(C.ready) // would this be better as a separate function?
 
 		return self
 
@@ -104,9 +103,9 @@ const connect =
 const auth =
 	({ comm }) => username => async password => {
 
-		await  comm('auth login')         (C.auth_promp)
-		await  comm(window.btoa(username))(C.auth_promp)
-		return comm(window.btoa(password))(C.auth_succe)
+		await  comm('auth login')         (C.auth_prompt)
+		await  comm(window.btoa(username))(C.auth_prompt)
+		return comm(window.btoa(password))(C.auth_good)
 
 	}
 
@@ -117,19 +116,19 @@ const auth =
 const send =
 	({ comm }) => email_from => (...emails_to) => async message => {
 
-		await comm(`mail from:<${email_from}>`)(C.serv_okayy)
+		await comm(`mail from:<${email_from}>`)(C.okay)
 
 		for (const email of emails_to)
-			await comm(`rcpt to:<${email}>`)(C.serv_okayy)
+			await comm(`rcpt to:<${email}>`)(C.okay)
 
 		await  comm('data')           (C.data_start)
-		return comm(`${message}\r\n.`)(C.serv_okayy)
+		return comm(`${message}\r\n.`)(C.okay)
 
 	}
 
 const quit =
 	({ comm, conn }) => () =>
-		comm('quit')(C.serv_okdon)
+		comm('quit')(C.done)
 			.finally(() => conn.close())
 
 // export
