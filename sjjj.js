@@ -5,12 +5,10 @@
 import { BufReader, readLines } from 'https://deno.land/std/io/bufio.ts'
 import { encode } from 'https://deno.land/std/encoding/utf8.ts'
 
-/* sends a message to connection then waits for
-** a response code that satisfies the given validator or errorer
-** e.g. `await communicator(conn)('ehlo hi')(C.ready)` means:
-**       send "ehlo hi\r\n" over conn
-**       and wait until it returns 220 (parsed from the start of the message)
-**       also, crash the program if it returns >= 500
+/* sends a message over conn then waits for a response with
+**     a code that satisfies the given validator or errorer
+** calls quit if the code satisfies the errorer
+** returns the response if the code satisfies the validator
 */
 const communicator =
 	({ conn, quit }) => message => async (validator, errorer) => {
@@ -76,9 +74,8 @@ const C = {
 	data_start:  354, // server is listening for email data
 }
 
-/* connects to an SMTP server
-** returns a bound 'communicator' function that can be
-** used by smpt_auth and smtp_send
+/* connects to an SMTP server and returns an object
+**     containing various bound functions and the Conn object itself
 */
 const connect =
 	async (hostname, port=465) => {
